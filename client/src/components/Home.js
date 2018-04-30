@@ -6,8 +6,7 @@ import * as actions from "../actions";
 
 class Home extends Component {
   componentWillMount() {
-    this.props.createSource();
-    this.props.createDestination();
+    this.props.createAccounts();
   }
 
   getSourceAccount() {

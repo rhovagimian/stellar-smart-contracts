@@ -9,16 +9,12 @@ import StellarSdk from "stellar-sdk";
 const server = new StellarSdk.Server("https://horizon-testnet.stellar.org");
 StellarSdk.Network.useTestNetwork();
 
-export const createSource = () => async dispatch => {
-  const res = await axios.get("/stellar/create_account");
+export const createAccounts = () => async dispatch => {
+  const source = await axios.get("/stellar/create_account");
+  const dest = await axios.get("/stellar/create_account");
 
-  dispatch({ type: CREATE_SOURCE, payload: res.data });
-};
-
-export const createDestination = () => async dispatch => {
-  const res = await axios.get("/stellar/create_account");
-
-  dispatch({ type: CREATE_DESTINATION, payload: res.data });
+  dispatch({ type: CREATE_DESTINATION, payload: dest.data });
+  dispatch({ type: CREATE_SOURCE, payload: source.data });
 };
 
 export const createEscrow = account => async dispatch => {
