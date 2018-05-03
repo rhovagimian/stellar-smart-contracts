@@ -1,6 +1,6 @@
 import React, { Component } from "react";
-import Account from "./accounts/Account";
-import SourceAccount from "./accounts/SourceAccount";
+import { Grid } from "semantic-ui-react";
+import Account from "./Account";
 import { connect } from "react-redux";
 import * as actions from "../actions";
 
@@ -9,41 +9,40 @@ class Home extends Component {
     this.props.createAccounts();
   }
 
-  getSourceAccount() {
-    if (this.props.source) {
-      return <SourceAccount account={this.props.source} />;
-    }
-    return <div />;
-  }
-
   getAccount(title, key) {
     if (this.props[key]) {
-      return <Account title={title} account={this.props[key]} />;
+      return (
+        <Account
+          title={title}
+          account={this.props[key]}
+          showButtons={this.props.escrow && key !== "escrow"}
+        />
+      );
     }
     return <div />;
   }
 
   render() {
     return (
-      <div>
-        <div className="row">
-          <div className="col col-1" />
-          <div className="col col-4">{this.getSourceAccount()}</div>
-          <div className="col col-2" />
-          <div className="col col-4">
+      <Grid>
+        <Grid.Row centered>
+          <Grid.Column width="1" />
+        </Grid.Row>
+        <Grid.Row centered>
+          <Grid.Column width="5">
+            {this.getAccount("Source", "source")}
+          </Grid.Column>
+          <Grid.Column width="2" />
+          <Grid.Column width="5">
             {this.getAccount("Destination", "destination")}
-          </div>
-          <div className="col col-1" />
-        </div>
-        <div className="row">
-          <div className="col col-12">&nbsp;</div>
-        </div>
-        <div className="row">
-          <div className="col col-4" />
-          <div className="col col-4">{this.getAccount("Escrow", "escrow")}</div>
-          <div className="col col-4" />
-        </div>
-      </div>
+          </Grid.Column>
+        </Grid.Row>
+        <Grid.Row centered>
+          <Grid.Column width="5">
+            {this.getAccount("Escrow", "escrow")}
+          </Grid.Column>
+        </Grid.Row>
+      </Grid>
     );
   }
 }

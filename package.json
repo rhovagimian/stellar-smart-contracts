@@ -24,6 +24,7 @@
     "npm": "^5.8.0",
     "request": "^2.85.0",
     "request-promise-native": "^1.0.5",
+    "semantic-ui-css": "^2.3.1",
     "stellar-sdk": "^0.8.0"
   }
 }

@@ -5,12 +5,17 @@ var server = new StellarSdk.Server("https://horizon-testnet.stellar.org");
 StellarSdk.Network.useTestNetwork();
 
 module.exports = app => {
-  app.get("/stellar/create_account", async (req, res) => {
+  app.post("/stellar/create_account", async (req, res) => {
+    const accountType = req.body.type;
     const keyPair = StellarSdk.Keypair.random();
-    if (!req.session.keyLookup) {
+    if (!req.session.keyLookup && !req.session.accounts) {
       req.session.keyLookup = {};
+      req.session.accounts = {};
     }
     req.session.keyLookup[keyPair.publicKey()] = keyPair.secret();
+    req.session.accounts[accountType] = {
+      key: keyPair.publicKey()
+    };
 
     console.log("Account secret", keyPair.secret());
 
@@ -27,12 +32,13 @@ module.exports = app => {
         res.status(422).send(err);
       });
 
-    res.send({ key: keyPair.publicKey() });
+    res.send(req.session.accounts);
   });
 
   app.post("/stellar/create_escrow", async (req, res) => {
     //load the source account
-    const srcSecret = req.session.keyLookup[req.body.key];
+    const accounts = req.body;
+    const srcSecret = req.session.keyLookup[accounts.source.key];
     const src = StellarSdk.Keypair.fromSecret(srcSecret);
     const srcAccount = await server.loadAccount(src.publicKey());
 
@@ -42,7 +48,7 @@ module.exports = app => {
 
     //create escrow account by first person
     const escrow = StellarSdk.Keypair.random();
-    const transaction = new StellarSdk.TransactionBuilder(srcAccount)
+    const transaction1 = new StellarSdk.TransactionBuilder(srcAccount)
       .addOperation(
         StellarSdk.Operation.createAccount({
           destination: escrow.publicKey(),
@@ -50,13 +56,160 @@ module.exports = app => {
         })
       )
       .build();
-    transaction.sign(StellarSdk.Keypair.fromSecret(src.secret()));
-    const receipt = await server.submitTransaction(transaction).catch(err => {
+    transaction1.sign(StellarSdk.Keypair.fromSecret(src.secret()));
+    await server.submitTransaction(transaction1).catch(err => {
       console.error("ERROR!", err);
       res.status(422).send(err);
     });
-    console.log(receipt);
-    res.send({ key: escrow.publicKey() });
+
+    console.log("-----------------------------------------------------");
+    console.log("------------------Transacation 2---------------------");
+    console.log("-----------------------------------------------------");
+    const destSecret = req.session.keyLookup[accounts.destination.key];
+    const dest = StellarSdk.Keypair.fromSecret(destSecret);
+    let escrowAccount = await server.loadAccount(escrow.publicKey());
+    const transaction2 = new StellarSdk.TransactionBuilder(escrowAccount)
+      .addOperation(
+        StellarSdk.Operation.setOptions({
+          signer: {
+            ed25519PublicKey: dest.publicKey(),
+            weight: 1
+          }
+        })
+      )
+      .addOperation(
+        StellarSdk.Operation.setOptions({
+          masterWeight: 1,
+          lowThreshold: 2,
+          medThreshold: 2,
+          highThreshold: 2
+        })
+      )
+      .build();
+    transaction2.sign(StellarSdk.Keypair.fromSecret(escrow.secret()));
+    await server.submitTransaction(transaction2).catch(err => {
+      console.error("ERROR!", err);
+      res.status(422).send(err);
+    });
+
+    //store keylookup and accounts
+    req.session.keyLookup[escrow.publicKey()] = escrow.secret();
+    req.session.accounts.escrow = { key: escrow.publicKey() };
+    res.send(req.session.accounts);
+  });
+
+  app.post("/stellar/sign_transaction", async (req, res) => {
+    const accounts = req.session.accounts;
+    const account = req.body;
+
+    const accountType = _.filter(Object.keys(accounts), accountType => {
+      return accounts[accountType].key === account.key;
+    });
+    //save account type
+    if (accountType) {
+      accounts[accountType] = account;
+    }
+
+    if (accounts.source.signed && accounts.destination.signed) {
+      const destSecret = req.session.keyLookup[accounts.destination.key];
+      const dest = StellarSdk.Keypair.fromSecret(destSecret);
+
+      console.log("-----------------------------------------------------");
+      console.log("------------------Transacation 3---------------------");
+      console.log("-----------------------------------------------------");
+
+      const unlockDate = new Date(new Date().getTime() + 5 * 60000);
+      console.log("Unlock date in 5 minutes:", unlockDate);
+      const escrowSecret = req.session.keyLookup[accounts.escrow.key];
+      const escrow = StellarSdk.Keypair.fromSecret(escrowSecret);
+      const escrowAccount = await server.loadAccount(escrow.publicKey());
+
+      const sequenceNumber = escrowAccount.sequenceNumber();
+      console.log("sequenceNumber", sequenceNumber);
+
+      const transaction3 = new StellarSdk.TransactionBuilder(
+        new StellarSdk.Account(escrow.publicKey(), sequenceNumber),
+        {
+          timebounds: {
+            minTime: unlockDate.getTime(),
+            maxTime: 0
+          }
+        }
+      )
+        .addOperation(
+          StellarSdk.Operation.setOptions({
+            masterWeight: 0,
+            lowThreshold: 1,
+            medThreshold: 1,
+            highThreshold: 1
+          })
+        )
+        .build();
+      transaction3.sign(StellarSdk.Keypair.fromSecret(escrow.secret()));
+      transaction3.sign(StellarSdk.Keypair.fromSecret(dest.secret()));
+
+      console.log("-----------------------------------------------------");
+      console.log("------------------Transacation 4---------------------");
+      console.log("-----------------------------------------------------");
+      const recoveryDate = new Date(unlockDate.getTime() + 5 * 60000);
+      const transaction4 = new StellarSdk.TransactionBuilder(
+        new StellarSdk.Account(escrow.publicKey(), sequenceNumber),
+        {
+          timebounds: {
+            minTime: recoveryDate.getTime(),
+            maxTime: 0
+          }
+        }
+      )
+        .addOperation(
+          StellarSdk.Operation.setOptions({
+            signer: {
+              ed25519PublicKey: dest.publicKey(),
+              weight: 0
+            },
+            masterWeight: 0,
+            lowThreshold: 1,
+            medThreshold: 1,
+            highThreshold: 1
+          })
+        )
+        .build();
+      transaction4.sign(StellarSdk.Keypair.fromSecret(escrow.secret()));
+      transaction4.sign(StellarSdk.Keypair.fromSecret(dest.secret()));
+      console.log(transaction4.sequence);
+
+      //can't submit this transaction for at least 5 minutes
+      //both the source & destination need to sign this transaction, each hold a copy,
+      //either can submit it at any point after the unlock period
+
+      console.log("-----------------------------------------------------");
+      console.log("------------------Transacation 5---------------------");
+      console.log("-----------------------------------------------------");
+      const srcSecret = req.session.keyLookup[accounts.source.key];
+      const src = StellarSdk.Keypair.fromSecret(srcSecret);
+      const srcAccount = await server.loadAccount(src.publicKey());
+      const transaction5 = new StellarSdk.TransactionBuilder(srcAccount)
+        .addOperation(
+          StellarSdk.Operation.payment({
+            destination: escrow.publicKey(),
+            asset: StellarSdk.Asset.native(),
+            amount: "100" // in XLM
+          })
+        )
+        .build();
+      transaction5.sign(StellarSdk.Keypair.fromSecret(src.secret()));
+      const receipt5 = await server
+        .submitTransaction(transaction5)
+        .catch(err => {
+          console.error("ERROR!", err);
+          res.status(422).send(err);
+        });
+      console.log(receipt5);
+      console.log("-----------------------------------------------------");
+    }
+
+    req.session.accounts = accounts;
+    res.send(accounts);
   });
 
   app.get("/stellar/end-to-end", async (req, res) => {
