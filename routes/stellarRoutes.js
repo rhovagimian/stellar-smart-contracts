@@ -5,10 +5,11 @@ var server = new StellarSdk.Server("https://horizon-testnet.stellar.org");
 StellarSdk.Network.useTestNetwork();
 
 module.exports = app => {
+  const UNLOCK_MINUTES = 0.25;
   app.post("/stellar/create_account", async (req, res) => {
     const accountType = req.body.type;
     const keyPair = StellarSdk.Keypair.random();
-    if (!req.session.keyLookup && !req.session.accounts) {
+    if (accountType === "source") {
       req.session.keyLookup = {};
       req.session.accounts = {};
     }
@@ -32,13 +33,14 @@ module.exports = app => {
         res.status(422).send(err);
       });
 
-    res.send(req.session.accounts);
+    res.send({ key: keyPair.publicKey() });
   });
 
   app.post("/stellar/create_escrow", async (req, res) => {
     //load the source account
     const accounts = req.body;
-    const srcSecret = req.session.keyLookup[accounts.source.key];
+
+    const srcSecret = req.session.keyLookup[accounts.source];
     const src = StellarSdk.Keypair.fromSecret(srcSecret);
     const srcAccount = await server.loadAccount(src.publicKey());
 
@@ -52,7 +54,7 @@ module.exports = app => {
       .addOperation(
         StellarSdk.Operation.createAccount({
           destination: escrow.publicKey(),
-          startingBalance: "5" // in XLM
+          startingBalance: "2" // in XLM
         })
       )
       .build();
@@ -65,7 +67,7 @@ module.exports = app => {
     console.log("-----------------------------------------------------");
     console.log("------------------Transacation 2---------------------");
     console.log("-----------------------------------------------------");
-    const destSecret = req.session.keyLookup[accounts.destination.key];
+    const destSecret = req.session.keyLookup[accounts.destination];
     const dest = StellarSdk.Keypair.fromSecret(destSecret);
     let escrowAccount = await server.loadAccount(escrow.publicKey());
     const transaction2 = new StellarSdk.TransactionBuilder(escrowAccount)
@@ -95,19 +97,19 @@ module.exports = app => {
     //store keylookup and accounts
     req.session.keyLookup[escrow.publicKey()] = escrow.secret();
     req.session.accounts.escrow = { key: escrow.publicKey() };
-    res.send(req.session.accounts);
+    res.send({ key: escrow.publicKey() });
   });
 
   app.post("/stellar/sign_transaction", async (req, res) => {
     const accounts = req.session.accounts;
-    const account = req.body;
+    const publicKey = req.body.key;
 
     const accountType = _.filter(Object.keys(accounts), accountType => {
-      return accounts[accountType].key === account.key;
+      return accounts[accountType].key === publicKey;
     });
     //save account type
     if (accountType) {
-      accounts[accountType] = account;
+      accounts[accountType].signed = !accounts[accountType].signed;
     }
 
     if (accounts.source.signed && accounts.destination.signed) {
@@ -118,8 +120,12 @@ module.exports = app => {
       console.log("------------------Transacation 3---------------------");
       console.log("-----------------------------------------------------");
 
-      const unlockDate = new Date(new Date().getTime() + 5 * 60000);
-      console.log("Unlock date in 5 minutes:", unlockDate);
+      const unlockDate = new Date(
+        new Date().getTime() + UNLOCK_MINUTES * 60000
+      );
+      console.log(`Unlock date in ${UNLOCK_MINUTES} minutes:`, unlockDate);
+      const unixUnlock = Math.round(unlockDate.getTime() / 1000);
+      console.log("Unix unlock date", unixUnlock);
       const escrowSecret = req.session.keyLookup[accounts.escrow.key];
       const escrow = StellarSdk.Keypair.fromSecret(escrowSecret);
       const escrowAccount = await server.loadAccount(escrow.publicKey());
@@ -131,7 +137,7 @@ module.exports = app => {
         new StellarSdk.Account(escrow.publicKey(), sequenceNumber),
         {
           timebounds: {
-            minTime: unlockDate.getTime(),
+            minTime: unixUnlock,
             maxTime: 0
           }
         }
@@ -147,16 +153,23 @@ module.exports = app => {
         .build();
       transaction3.sign(StellarSdk.Keypair.fromSecret(escrow.secret()));
       transaction3.sign(StellarSdk.Keypair.fromSecret(dest.secret()));
+      accounts.destination.envelope = transaction3.toEnvelope().toXDR("base64");
+      accounts.destination.remainingTime =
+        (unlockDate - new Date().getTime()) / 1000;
 
       console.log("-----------------------------------------------------");
       console.log("------------------Transacation 4---------------------");
       console.log("-----------------------------------------------------");
-      const recoveryDate = new Date(unlockDate.getTime() + 5 * 60000);
+      const recoveryDate = new Date(
+        unlockDate.getTime() + UNLOCK_MINUTES * 60000
+      );
+      const unixRecovery = Math.round(recoveryDate.getTime() / 1000);
+      console.log("Unix recovery time", unixRecovery);
       const transaction4 = new StellarSdk.TransactionBuilder(
         new StellarSdk.Account(escrow.publicKey(), sequenceNumber),
         {
           timebounds: {
-            minTime: recoveryDate.getTime(),
+            minTime: unixRecovery,
             maxTime: 0
           }
         }
@@ -167,7 +180,6 @@ module.exports = app => {
               ed25519PublicKey: dest.publicKey(),
               weight: 0
             },
-            masterWeight: 0,
             lowThreshold: 1,
             medThreshold: 1,
             highThreshold: 1
@@ -176,6 +188,9 @@ module.exports = app => {
         .build();
       transaction4.sign(StellarSdk.Keypair.fromSecret(escrow.secret()));
       transaction4.sign(StellarSdk.Keypair.fromSecret(dest.secret()));
+      accounts.source.envelope = transaction4.toEnvelope().toXDR("base64");
+      accounts.source.remainingTime =
+        (recoveryDate - new Date().getTime()) / 1000;
       console.log(transaction4.sequence);
 
       //can't submit this transaction for at least 5 minutes
@@ -207,12 +222,63 @@ module.exports = app => {
       console.log(receipt5);
       console.log("-----------------------------------------------------");
     }
-
+    console.log(accounts);
     req.session.accounts = accounts;
     res.send(accounts);
   });
 
-  app.get("/stellar/end-to-end", async (req, res) => {
+  app.post("/stellar/submit_transaction", async (req, res) => {
+    const envelope = req.body.envelope;
+    const withdrawPublicKey = _.filter(req.session.accounts, { envelope })[0]
+      .key;
+
+    const withdrawSecret = req.session.keyLookup[withdrawPublicKey];
+    const transaction = new StellarSdk.Transaction(envelope);
+    console.log("-----------------------------------------------------");
+    console.log("----------------Submit Transacation------------------");
+    console.log("-----------------------------------------------------");
+    const receipt = await server.submitTransaction(transaction).catch(err => {
+      console.error("ERROR!", err.data.extras.results_codes);
+      res.status(422).send(err.data);
+    });
+    if (!receipt || !withdrawSecret) {
+      return;
+    }
+    //withdraw all the money from escrow to account
+    const withdrawal = StellarSdk.Keypair.fromSecret(withdrawSecret);
+    //get escrow account
+    const escrowSecret = req.session.keyLookup[req.session.accounts.escrow.key];
+    const escrow = StellarSdk.Keypair.fromSecret(escrowSecret);
+    const escrowAccount = await server.loadAccount(escrow.publicKey());
+
+    console.log("Distribute to Account", withdrawal.publicKey());
+    const withdrawTransaction = new StellarSdk.TransactionBuilder(escrowAccount)
+      // add a payment operation to the transaction
+      .addOperation(
+        StellarSdk.Operation.payment({
+          destination: withdrawal.publicKey(),
+          asset: StellarSdk.Asset.native(),
+          amount: "100.50" // 100.50 XLM
+        })
+      )
+      .build();
+    if (withdrawPublicKey === req.session.accounts.source.key) {
+      withdrawTransaction.sign(escrow);
+    } else {
+      withdrawTransaction.sign(withdrawal);
+    }
+    console.log(withdrawTransaction);
+    const withdrawReceipt = await server
+      .submitTransaction(withdrawTransaction)
+      .catch(err => {
+        console.error("ERROR!", err.data.extras.results_codes);
+        res.status(422).send(err);
+      });
+    res.send(withdrawReceipt);
+  });
+};
+
+/*app.get("/stellar/end-to-end", async (req, res) => {
     const src = StellarSdk.Keypair.random();
     console.log("source secret", src.secret());
 
@@ -305,10 +371,17 @@ module.exports = app => {
             weight: 1
           }
         })
-      )
+    ).addOperation(
+      StellarSdk.Operation.setOptions({
+        signer: {
+          ed25519PublicKey: source.publicKey(),
+          weight: 1
+        }
+      })
+    )
       .addOperation(
         StellarSdk.Operation.setOptions({
-          masterWeight: 1,
+          masterWeight: 0,
           lowThreshold: 2,
           medThreshold: 2,
           highThreshold: 2
@@ -325,16 +398,17 @@ module.exports = app => {
     console.log("------------------Transacation 3---------------------");
     console.log("-----------------------------------------------------");
 
-    const unlockDate = new Date(new Date().getTime() + 5 * 60000);
-    console.log("Unlock date in 5 minutes:", unlockDate);
+    const unlockDate = new Date(new Date().getTime() + UNLOCK_MINUTES * 60000);
+    console.log(`Unlock date in ${UNLOCK_MINUTES} minutes:`, unlockDate);
+    const unixUnlock = Math.round(unlockDate.getTime() / 1000);
+    console.log("Unix unlock date", unixUnlock);
     const sequenceNumber = escrowAccount.sequenceNumber();
-    console.log("sequenceNumber", sequenceNumber);
 
     const transaction3 = new StellarSdk.TransactionBuilder(
       new StellarSdk.Account(escrow.publicKey(), sequenceNumber),
       {
         timebounds: {
-          minTime: unlockDate.getTime(),
+          minTime: unixUnlock,
           maxTime: 0
         }
       }
@@ -355,12 +429,18 @@ module.exports = app => {
     console.log("-----------------------------------------------------");
     console.log("------------------Transacation 4---------------------");
     console.log("-----------------------------------------------------");
-    const recoveryDate = new Date(unlockDate.getTime() + 5 * 60000);
+    const recoveryDate = new Date(
+      unlockDate.getTime() + UNLOCK_MINUTES * 60000
+    );
+    console.log("Recovery Time", recoveryDate);
+    const unixRecovery = Math.round(recoveryDate.getTime() / 1000);
+    console.log("Unix recovery time", unixRecovery);
+
     const transaction4 = new StellarSdk.TransactionBuilder(
       new StellarSdk.Account(escrow.publicKey(), sequenceNumber),
       {
         timebounds: {
-          minTime: recoveryDate.getTime(),
+          minTime: unixRecovery,
           maxTime: 0
         }
       }
@@ -420,5 +500,4 @@ module.exports = app => {
     });
 
     res.send("Check the logs!");
-  });
-};
+  }); */

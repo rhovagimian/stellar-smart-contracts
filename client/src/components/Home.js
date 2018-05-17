@@ -9,13 +9,22 @@ class Home extends Component {
     this.props.createAccounts();
   }
 
-  getAccount(title, key) {
-    if (this.props[key]) {
+  getAccount(title, type, icon) {
+    if (this.props[type] && this.props[type].key) {
+      const { key, envelope, balances, signed, remainingTime } = this.props[
+        type
+      ];
+
       return (
         <Account
           title={title}
-          account={this.props[key]}
-          showButtons={this.props.escrow && key !== "escrow"}
+          icon={icon}
+          publicKey={key}
+          envelope={envelope}
+          balances={balances}
+          signed={signed}
+          remainingTime={remainingTime}
+          showButtons={this.props.escrow && type !== "escrow"}
         />
       );
     }
@@ -48,22 +57,22 @@ class Home extends Component {
               that if Alyssa doesn’t claim the tokens, they can be recovered.
               This way, the tokens won’t be lost forever.
             </p>
-            <p>Note: In this example the escrow is valid for 5 minutes.</p>
+            <p>Note: In this example the escrow is valid for 2 minutes.</p>
             <Divider />
           </Grid.Column>
         </Grid.Row>
         <Grid.Row centered>
           <Grid.Column width="5">
-            {this.getAccount("Source", "source")}
+            {this.getAccount("Source", "source", "home")}
           </Grid.Column>
           <Grid.Column width="2" />
           <Grid.Column width="5">
-            {this.getAccount("Destination", "destination")}
+            {this.getAccount("Destination", "destination", "university")}
           </Grid.Column>
         </Grid.Row>
         <Grid.Row centered>
           <Grid.Column width="5">
-            {this.getAccount("Escrow", "escrow")}
+            {this.getAccount("Escrow", "escrow", "lock")}
           </Grid.Column>
         </Grid.Row>
       </Grid>
@@ -71,12 +80,8 @@ class Home extends Component {
   }
 }
 
-function mapStateToProps({ accounts }) {
-  return {
-    source: accounts.source,
-    destination: accounts.destination,
-    escrow: accounts.escrow
-  };
+function mapStateToProps({ source, destination, escrow }) {
+  return { source, destination, escrow };
 }
 
 export default connect(mapStateToProps, actions)(Home);
