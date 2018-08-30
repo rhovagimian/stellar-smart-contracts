@@ -5,7 +5,7 @@ var server = new StellarSdk.Server("https://horizon-testnet.stellar.org");
 StellarSdk.Network.useTestNetwork();
 
 module.exports = app => {
-  const UNLOCK_MINUTES = 0.25;
+  const UNLOCK_MINUTES = 2;
   app.post("/stellar/create_account", async (req, res) => {
     const accountType = req.body.type;
     const keyPair = StellarSdk.Keypair.random();
