@@ -15,12 +15,12 @@
     "react-dom": "^16.2.0",
     "react-redux": "^5.0.7",
     "react-router-dom": "^4.2.2",
-    "react-scripts": "1.1.1",
+    "react-scripts": "^1.1.5",
     "react-stripe-checkout": "^2.6.3",
     "redux": "^3.7.2",
     "redux-thunk": "^2.2.0",
     "semantic-ui-react": "^0.80.0",
-    "stellar-sdk": "^0.8.0"
+    "stellar-sdk": "^0.10.3"
   },
   "scripts": {
     "start": "react-scripts start",
