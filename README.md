@@ -1,4 +1,4 @@
-# stellar-smart-contract
+# stellar-smart-contracts
 React, NodeJS application with sample escrow account creation using Stellar Smart Contract example
 
 Working example of the 2-Party Multisignature Escrow Account with Time Lock & Recovery
